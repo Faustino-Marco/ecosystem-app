@@ -197,7 +197,7 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Ecosystem Evolution Simulator")
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont('Inter', FONT_SIZE)
+    font = pygame.font.SysFont(None, FONT_SIZE)
     
     entities = []
     
@@ -289,7 +289,7 @@ def main():
         screen.blit(carn_text, (10, 10 + FONT_SIZE * 3))
 
         if is_paused:
-            pause_font = pygame.font.SysFont('Inter', 60, bold=True)
+            pause_font = pygame.font.SysFont(None, 60, bold=True)
             pause_text = pause_font.render("PAUSED", True, YELLOW)
             text_rect = pause_text.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
             screen.blit(pause_text, text_rect)
