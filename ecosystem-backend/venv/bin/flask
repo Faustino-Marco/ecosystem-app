@@ -1,8 +1,0 @@
-#!/home/faustino_wsl_hp15/gemini_apps/ecosystem-app/ecosystem-backend/venv/bin/python3.9
-# -*- coding: utf-8 -*-
-import re
-import sys
-from flask.cli import main
-if __name__ == '__main__':
-    sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
-    sys.exit(main())
