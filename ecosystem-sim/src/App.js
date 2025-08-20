@@ -4,6 +4,35 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 const random = (min, max) => Math.random() * (max - min) + min;
 const distance = (x1, y1, x2, y2) => Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
 
+// --- API Communication ---
+const logEventToServer = async (eventType, eventData) => {
+  try {
+    const payload = {
+      type: eventType,
+      timestamp: new Date().toISOString(),
+      data: eventData
+    };
+
+    const response = await fetch('http://localhost:5000/log_event', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('API Response:', result); // Optional: log success response
+  } catch (error) {
+    console.error("Could not log event to server:", error);
+  }
+};
+
+
 // --- Base Creature Class (Logic, not a React component) ---
 class Creature {
   constructor(x, y) {
@@ -71,7 +100,7 @@ class Herbivore extends Creature {
     this.type = 'herbivore';
     this.radius = 8;
     this.color = '#3b82f6';
-    this.speed = 1.3;
+    this.speed = 1.2;
     this.energyDecay = 0.15;
     this.maxEnergy = 200;
     this.energy = 100;
@@ -254,6 +283,12 @@ export default function App() {
 
   const addEntity = useCallback((entity) => {
     entitiesRef.current.push(entity);
+    // --- DATA ENGINEERING: Log the birth event ---
+    logEventToServer('CREATURE_BIRTH', {
+      species: entity.type,
+      x: Math.round(entity.x),
+      y: Math.round(entity.y)
+    });
   }, []);
 
   const initialPopulation = useCallback(() => {
@@ -284,7 +319,6 @@ export default function App() {
     ctx.fillStyle = 'rgba(26, 32, 44, 0.4)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const newEntities = [];
     const entitiesToAdd = [];
     const addEntityCallback = (entity) => entitiesToAdd.push(entity);
 
@@ -306,7 +340,6 @@ export default function App() {
       setDay(d => d + 1);
     }
 
-    // Update stats less frequently for performance
     if (frameCountRef.current % 5 === 0) {
       const currentCounts = { plant: 0, herbivore: 0, carnivore: 0 };
       entitiesRef.current.forEach(e => {
