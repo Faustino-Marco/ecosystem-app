@@ -1,10 +1,9 @@
 # Ecosystem-Sim: Data Pipeline Engineering Exercise
 I'm using a simple ecosystem simulation to create a data pipeline for ETL & analysis. The objective is to track the simulator's events and extract insightful data for analysis & visualization. 
 
-## LATEST UPDATE 
+## LATEST UPDATES
 
-(20/8/2025) Sprint 1
-### The Data Pipeline
+## (20/8/2025) Sprint 1: The Data Pipeline
 
 Our primary goal for this first phase was to establish a live, event-driven data pipeline. We've successfully built the foundational infrastructure for that.
 
