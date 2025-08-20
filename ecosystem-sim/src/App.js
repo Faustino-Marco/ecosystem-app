@@ -71,7 +71,7 @@ class Herbivore extends Creature {
     this.type = 'herbivore';
     this.radius = 8;
     this.color = '#3b82f6';
-    this.speed = 1.2;
+    this.speed = 1.3;
     this.energyDecay = 0.15;
     this.maxEnergy = 200;
     this.energy = 100;
