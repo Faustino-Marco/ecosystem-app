@@ -17,6 +17,7 @@ RED = (239, 68, 68)
 YELLOW = (234, 179, 8)
 CYAN = (34, 211, 238)
 GRAY = (107, 114, 128)
+PURPLE = (148, 0, 211)
 
 # Simulation settings
 PLANT_ENERGY = 50
@@ -46,6 +47,15 @@ EFFECT_KILL = ((255, 255, 255), 24, 14)
 EFFECT_EAT_PLANT = ((34, 197, 94), 14, 10)
 EFFECT_BIRTH = ((234, 179, 8), 18, 16)
 EFFECT_DEATH = ((239, 68, 68), 20, 14)
+EFFECT_POISON = ((148, 0, 211), 40, 28)  # superpredator death by poison
+
+# Population control / superpredator
+# Spawns when a single species exceeds SUPERPREDATOR_TRIGGER (proxy for performance lag).
+# Poison plants appear once the overpopulated species drops back to SUPERPREDATOR_RECOVERY.
+SUPERPREDATOR_TRIGGER = 80     # single-species count that triggers spawn
+SUPERPREDATOR_RECOVERY = 30    # triggered species must fall here before poison plants appear
+POISON_PLANT_SPAWN_RATE = 150  # frames between poison plant appearances
+MAX_POISON_PLANTS = 4
 
 
 # --- Utility Functions ---
@@ -257,6 +267,28 @@ class Plant(Creature):
         pass
 
 
+class PoisonPlant(Creature):
+    """Lethal to the superpredator; otherwise inert.
+    Only appears after the overpopulated species has been culled back down.
+    Pulses with a purple glow to signal its danger."""
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.type = 'poison_plant'
+        self.radius = 7
+        self.energy = 0
+        self._pulse = random.randint(0, 59)
+
+    def update(self, grid, add_entity_callback, add_effect_callback):
+        self._pulse = (self._pulse + 1) % 60
+
+    def draw(self, screen):
+        pulse = 0.5 + 0.5 * math.sin(self._pulse * math.pi / 30)
+        r = max(4, int(self.radius + 3 * pulse))
+        bright = int(160 + 95 * pulse)
+        pygame.draw.circle(screen, (bright // 2, 0, bright), (int(self.x), int(self.y)), r)
+        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), r, 1)
+
+
 class Herbivore(Creature):
     """Eats plants."""
     BASE_HUE = 210
@@ -379,6 +411,92 @@ class Carnivore(Creature):
             add_effect_callback(EFFECT_BIRTH, self.x, self.y)
 
 
+class Superpredator(Creature):
+    """Omnivorous apex predator that culls runaway populations.
+    Hunts herbivores and carnivores; eats regular plants as fallback.
+    Attracted to poison plants (doesn't distinguish them) — contact is lethal.
+    Does not reproduce; can only be eliminated by eating a poison plant."""
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.type = 'superpredator'
+        self.max_energy = 700
+        self.energy = 500
+        self.speed = 3.0
+        self.energy_decay = 0.07  # very low decay so it persists until poison finds it
+        self.vision_radius = 300
+        self.radius = 18
+
+    def draw(self, screen):
+        pygame.draw.circle(screen, PURPLE, (int(self.x), int(self.y)), self.radius)
+        pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.radius, 3)
+        energy_pct = self.energy / self.max_energy
+        bar_w = self.radius * 2
+        bar_x = int(self.x - self.radius)
+        bar_y = int(self.y - self.radius - 10)
+        health_color = GREEN if energy_pct > 0.5 else (YELLOW if energy_pct > 0.2 else RED)
+        pygame.draw.rect(screen, (50, 50, 50), (bar_x - 1, bar_y - 1, bar_w + 2, 7))
+        pygame.draw.rect(screen, health_color, (bar_x, bar_y, int(bar_w * energy_pct), 5))
+
+    def update(self, grid, add_entity_callback, add_effect_callback):
+        # Priority 1: mobile prey (herbivores & carnivores)
+        nearest_prey = None
+        min_prey_dist = float('inf')
+        for prey_type in ('herbivore', 'carnivore'):
+            for entity in grid.nearby(self.x, self.y, self.vision_radius, prey_type):
+                d = distance((self.x, self.y), (entity.x, entity.y))
+                if d < min_prey_dist and d < self.vision_radius:
+                    min_prey_dist = d
+                    nearest_prey = entity
+
+        # Priority 2: poison plants — the superpredator sees them as ordinary plants
+        nearest_poison = None
+        min_poison_dist = float('inf')
+        for entity in grid.nearby(self.x, self.y, self.vision_radius, 'poison_plant'):
+            d = distance((self.x, self.y), (entity.x, entity.y))
+            if d < min_poison_dist and d < self.vision_radius:
+                min_poison_dist = d
+                nearest_poison = entity
+
+        # Priority 3: regular plants (omnivore fallback when no prey or poison is visible)
+        nearest_plant = None
+        min_plant_dist = float('inf')
+        for entity in grid.nearby(self.x, self.y, self.vision_radius, 'plant'):
+            d = distance((self.x, self.y), (entity.x, entity.y))
+            if d < min_plant_dist and d < self.vision_radius:
+                min_plant_dist = d
+                nearest_plant = entity
+
+        # Choose target: prey > poison plant > regular plant
+        target = nearest_prey
+        if target is None:
+            target = nearest_poison if nearest_poison else nearest_plant
+
+        if target:
+            angle = math.atan2(target.y - self.y, target.x - self.x)
+            self.vx = math.cos(angle) * self.speed
+            self.vy = math.sin(angle) * self.speed
+            if distance((self.x, self.y), (target.x, target.y)) < self.radius + target.radius and target.is_alive:
+                if target.type == 'poison_plant':
+                    self.is_alive = False
+                    target.is_alive = False
+                    add_effect_callback(EFFECT_POISON, self.x, self.y)
+                    return  # skip base update; entity is dead
+                elif target.type == 'plant':
+                    self.energy = min(self.max_energy, self.energy + target.energy * 0.5)
+                    target.is_alive = False
+                    add_effect_callback(EFFECT_EAT_PLANT, target.x, target.y)
+                else:
+                    self.energy = min(self.max_energy, self.energy + target.energy * 0.6)
+                    target.is_alive = False
+                    add_effect_callback(EFFECT_KILL, target.x, target.y)
+        else:
+            if random.random() < 0.02:
+                self.vx = random.uniform(-self.speed, self.speed)
+                self.vy = random.uniform(-self.speed, self.speed)
+
+        super().update(grid, add_entity_callback, add_effect_callback)
+
+
 # --- Population Graph ---
 def draw_population_graph(screen, font, history):
     graph_w, graph_h = 300, 100
@@ -396,8 +514,8 @@ def draw_population_graph(screen, font, history):
                 max_val = m
 
     step = graph_w / max(1, HISTORY_MAX - 1)
-    for species, color in [('plant', GREEN), ('herbivore', BLUE), ('carnivore', RED)]:
-        series = history[species]
+    for species, color in [('plant', GREEN), ('herbivore', BLUE), ('carnivore', RED), ('superpredator', PURPLE)]:
+        series = history.get(species, [])
         if len(series) < 2:
             continue
         points = []
@@ -422,7 +540,10 @@ def main():
     entities = []
     effects = []
     grid = SpatialGrid(GRID_CELL_SIZE)
-    history = {'plant': [], 'herbivore': [], 'carnivore': []}
+    history = {'plant': [], 'herbivore': [], 'carnivore': [], 'superpredator': []}
+
+    overpop_species = None  # species that triggered the current superpredator
+    warning_frames = 0      # countdown for the spawn-warning overlay
 
     def add_entity(entity):
         entities.append(entity)
@@ -458,6 +579,8 @@ def main():
                     initial_population()
                     day = 0
                     frame_count = 0
+                    overpop_species = None
+                    warning_frames = 0
                 if event.key == pygame.K_p:
                     for _ in range(10):
                         add_entity(Plant(random.randint(10, SCREEN_WIDTH - 10), random.randint(10, SCREEN_HEIGHT - 10)))
@@ -483,13 +606,18 @@ def main():
             entities = [e for e in entities if e.is_alive]
             entities.extend(entities_to_add)
 
+            herb_count = sum(1 for e in entities if e.type == 'herbivore')
+            carn_count = sum(1 for e in entities if e.type == 'carnivore')
+            superpred_count = sum(1 for e in entities if e.type == 'superpredator')
+            poison_count = sum(1 for e in entities if e.type == 'poison_plant')
             plant_count = sum(1 for e in entities if e.type == 'plant')
+
             if frame_count % PLANT_GROWTH_RATE == 0 and plant_count < MAX_PLANTS:
                 add_entity(Plant(random.randint(10, SCREEN_WIDTH - 10), random.randint(10, SCREEN_HEIGHT - 10)))
 
-            if EXTINCTION_RECOVERY:
-                herb_count = sum(1 for e in entities if e.type == 'herbivore')
-                carn_count = sum(1 for e in entities if e.type == 'carnivore')
+            # Extinction recovery — disabled while superpredator is active so it can't be
+            # undermined by the sim immediately re-seeding the species it's hunting.
+            if EXTINCTION_RECOVERY and superpred_count == 0:
                 if herb_count == 0:
                     for _ in range(EXTINCTION_RESPAWN_HERBIVORES):
                         add_entity(Herbivore(random.randint(10, SCREEN_WIDTH - 10), random.randint(10, SCREEN_HEIGHT - 10)))
@@ -497,12 +625,45 @@ def main():
                     for _ in range(EXTINCTION_RESPAWN_CARNIVORES):
                         add_entity(Carnivore(random.randint(10, SCREEN_WIDTH - 10), random.randint(10, SCREEN_HEIGHT - 10)))
 
+            # --- Superpredator population control ---
+            if superpred_count == 0:
+                if overpop_species is not None:
+                    # Superpredator died (ate a poison plant or starved) — reset state.
+                    overpop_species = None
+                elif herb_count >= SUPERPREDATOR_TRIGGER:
+                    overpop_species = 'herbivore'
+                    add_entity(Superpredator(
+                        random.randint(50, SCREEN_WIDTH - 50),
+                        random.randint(50, SCREEN_HEIGHT - 50),
+                    ))
+                    warning_frames = 240
+                elif carn_count >= SUPERPREDATOR_TRIGGER:
+                    overpop_species = 'carnivore'
+                    add_entity(Superpredator(
+                        random.randint(50, SCREEN_WIDTH - 50),
+                        random.randint(50, SCREEN_HEIGHT - 50),
+                    ))
+                    warning_frames = 240
+
+            # Poison plants emerge once the overpopulated species has been sufficiently culled.
+            if overpop_species is not None and superpred_count > 0:
+                triggered_count = herb_count if overpop_species == 'herbivore' else carn_count
+                if triggered_count <= SUPERPREDATOR_RECOVERY and poison_count < MAX_POISON_PLANTS:
+                    if frame_count % POISON_PLANT_SPAWN_RATE == 0:
+                        add_entity(PoisonPlant(
+                            random.randint(10, SCREEN_WIDTH - 10),
+                            random.randint(10, SCREEN_HEIGHT - 10),
+                        ))
+
             effects = [e for e in effects if e.step()]
 
             frame_count += 1
             if frame_count >= FRAMES_PER_DAY:
                 frame_count = 0
                 day += 1
+
+            if warning_frames > 0:
+                warning_frames -= 1
 
         screen.fill(BLACK)
 
@@ -512,7 +673,7 @@ def main():
         for effect in effects:
             effect.draw(screen)
 
-        counts = {'plant': 0, 'herbivore': 0, 'carnivore': 0}
+        counts = {'plant': 0, 'herbivore': 0, 'carnivore': 0, 'superpredator': 0, 'poison_plant': 0}
         for e in entities:
             counts[e.type] += 1
 
@@ -526,11 +687,13 @@ def main():
         plant_text = font.render(f"Plants: {counts['plant']}", True, GREEN)
         herb_text = font.render(f"Herbivores: {counts['herbivore']}", True, BLUE)
         carn_text = font.render(f"Carnivores: {counts['carnivore']}", True, RED)
+        pred_text = font.render(f"Superpredator: {counts['superpredator']}", True, PURPLE)
 
         screen.blit(day_text, (10, 10))
         screen.blit(plant_text, (10, 10 + FONT_SIZE))
         screen.blit(herb_text, (10, 10 + FONT_SIZE * 2))
         screen.blit(carn_text, (10, 10 + FONT_SIZE * 3))
+        screen.blit(pred_text, (10, 10 + FONT_SIZE * 4))
 
         draw_population_graph(screen, font, history)
 
@@ -539,6 +702,19 @@ def main():
             pause_text = pause_font.render("PAUSED", True, YELLOW)
             text_rect = pause_text.get_rect(center=(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2))
             screen.blit(pause_text, text_rect)
+
+        # Warning banner when the superpredator first arrives
+        if warning_frames > 0:
+            warn_font = pygame.font.SysFont(None, 52, bold=True)
+            warn_text = warn_font.render("!! SUPERPREDATOR HAS ARRIVED !!", True, PURPLE)
+            sub_text = font.render("Overpopulation detected — balance will be restored", True, WHITE)
+            warn_rect = warn_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20))
+            sub_rect = sub_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20))
+            bg_surf = pygame.Surface((warn_rect.width + 24, 76), pygame.SRCALPHA)
+            bg_surf.fill((0, 0, 0, min(180, warning_frames * 2)))
+            screen.blit(bg_surf, (warn_rect.x - 12, warn_rect.y - 8))
+            screen.blit(warn_text, warn_rect)
+            screen.blit(sub_text, sub_rect)
 
         pygame.display.flip()
 
